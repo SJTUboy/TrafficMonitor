@@ -326,6 +326,8 @@ void CTrafficMonitorDlg::AutoSelect()
 			}
 		}
 	}
+	theApp.m_cfg_data.m_connection_name = m_connections[m_connection_selected].description_2;
+	m_connection_change_flag = true;
 }
 
 void CTrafficMonitorDlg::IniConnection()
@@ -342,9 +344,23 @@ void CTrafficMonitorDlg::IniConnection()
 		m_pIfTable = (MIB_IFTABLE *)malloc(m_dwSize);	//用新的大小重新开辟一块内存
 	}
 	//获取当前所有的连接，并保存到m_connections容器中
-	CAdapterCommon::GetAdapterInfo(m_connections);
 	GetIfTable(m_pIfTable, &m_dwSize, FALSE);
-	CAdapterCommon::GetIfTableInfo(m_connections, m_pIfTable);
+	if (!theApp.m_general_data.show_all_interface)
+	{
+		CAdapterCommon::GetAdapterInfo(m_connections);
+		CAdapterCommon::GetIfTableInfo(m_connections, m_pIfTable);
+	}
+	else
+	{
+		CAdapterCommon::GetAllIfTableInfo(m_connections, m_pIfTable);
+	}
+
+	//如果在设置了“显示所有网络连接”时设置了“选择全部”，则改为“自动选择”
+	if (theApp.m_general_data.show_all_interface && theApp.m_cfg_data.m_select_all)
+	{
+		theApp.m_cfg_data.m_select_all = false;
+		theApp.m_cfg_data.m_auto_select = true;
+	}
 
 	//写入调试日志
 	if (theApp.m_debug_log)
@@ -390,13 +406,13 @@ void CTrafficMonitorDlg::IniConnection()
 		m_connection_selected = 0;
 		for (size_t i{}; i < m_connections.size(); i++)
 		{
-			if (m_connections[i].description == theApp.m_cfg_data.m_connection_name)
+			if (m_connections[i].description_2 == theApp.m_cfg_data.m_connection_name)
 				m_connection_selected = i;
 		}
 	}
 	if (m_connection_selected < 0 || m_connection_selected >= m_connections.size())
 		m_connection_selected = 0;
-	theApp.m_cfg_data.m_connection_name = m_connections[m_connection_selected].description;
+	theApp.m_cfg_data.m_connection_name = m_connections[m_connection_selected].description_2;
 
 	//根据已获取到的连接在菜单中添加相应项目
 	m_menu.DestroyMenu();
@@ -531,7 +547,8 @@ void CTrafficMonitorDlg::LoadHistoryTraffic()
 			traffic.day = atoi(temp.c_str());
 			temp = current_line.substr(11);
 			traffic.kBytes = atoi(temp.c_str());
-			m_history_traffics.push_back(traffic);
+			if (traffic.year > 0 && traffic.month > 0 && traffic.day > 0 && traffic.kBytes > 0)
+				m_history_traffics.push_back(traffic);
 		}
 	}
 
@@ -600,6 +617,10 @@ void CTrafficMonitorDlg::_OnOptions(int tab)
 
 		if(optionsDlg.m_tab3_dlg.IsAutoRunModified())
 			theApp.SetAutoRun(theApp.m_general_data.auto_run);
+
+		if (optionsDlg.m_tab3_dlg.IsShowAllInterfaceModified())
+			IniConnection();
+
 		theApp.SaveConfig();
 	}
 }
@@ -671,6 +692,11 @@ void CTrafficMonitorDlg::LoadBackGroundImage()
 	{
 		wnd_rgn.CreateRectRgnIndirect(CRect(CPoint(0, 0), image_size));		//载入掩码图片失败，则使用窗口大小作为窗口区域
 	}
+	//避免获取到的窗口区域为空
+	CRgn empty_rgn;
+	empty_rgn.CreateRectRgnIndirect(CRect{});	//创建一个空的CRgn对象
+	if(wnd_rgn.EqualRgn(&empty_rgn))
+		wnd_rgn.SetRectRgn(CRect(CPoint(0, 0), image_size));	//如果获取到的窗口区域为空，则使用窗口大小作为窗口区域
 	SetWindowRgn(wnd_rgn, TRUE);		//设置窗口区域
 }
 
@@ -1038,6 +1064,18 @@ void CTrafficMonitorDlg::OnTimer(UINT_PTR nIDEvent)
 			descr = (const char*)m_pIfTable->table[m_connections[m_connection_selected].index].bDescr;
 			if (descr != theApp.m_cfg_data.m_connection_name)
 			{
+				//写入额外的调试信息
+				if (theApp.m_debug_log)
+				{
+					CString log_str;
+					log_str = _T("连接名称不匹配：\r\n");
+					log_str += _T("IfTable description: ");
+					log_str += descr.c_str();
+					log_str += _T("\r\nm_connection_name: ");
+					log_str += theApp.m_cfg_data.m_connection_name.c_str();
+					CCommon::WriteLog(log_str, (theApp.m_config_dir + L".\\connections.log").c_str());
+				}
+
 				IniConnection();
 				CString info;
 				info.LoadString(IDS_CONNECTION_NOT_MATCH);
@@ -1402,7 +1440,7 @@ BOOL CTrafficMonitorDlg::OnCommand(WPARAM wParam, LPARAM lParam)
 	if (uMsg > ID_SELECT_ALL_CONNECTION && uMsg <= ID_SELECT_ALL_CONNECTION + m_connections.size())	//选择了一个网络连接
 	{
 		m_connection_selected = uMsg - ID_SELECT_ALL_CONNECTION - 1;
-		theApp.m_cfg_data.m_connection_name = m_connections[m_connection_selected].description;
+		theApp.m_cfg_data.m_connection_name = m_connections[m_connection_selected].description_2;
 		theApp.m_cfg_data.m_auto_select = false;
 		theApp.m_cfg_data.m_select_all = false;
 		theApp.SaveConfig();
@@ -1438,6 +1476,8 @@ void CTrafficMonitorDlg::OnInitMenu(CMenu* pMenu)
 		pMenu->EnableMenuItem(ID_SHOW_NOTIFY_ICON, MF_BYCOMMAND | MF_GRAYED);
 	else
 		pMenu->EnableMenuItem(ID_SHOW_NOTIFY_ICON, MF_BYCOMMAND | MF_ENABLED);
+
+	pMenu->EnableMenuItem(ID_SELECT_ALL_CONNECTION, MF_BYCOMMAND | (theApp.m_general_data.show_all_interface? MF_GRAYED : MF_ENABLED));
 
 	//pMenu->SetDefaultItem(ID_NETWORK_INFO);
 }

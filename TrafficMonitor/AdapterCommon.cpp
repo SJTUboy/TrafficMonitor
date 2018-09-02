@@ -65,14 +65,41 @@ void CAdapterCommon::GetIfTableInfo(vector<NetWorkConection>& adapters, MIB_IFTA
 			continue;
 		int index;
 		index = FindConnectionInIfTable(adapters[i].description, pIfTable);
-		if (index == -1)		//如果使用精确匹配的方式没有找到，则采用部分匹配的方式再查找一次
+		if (index == -1)		//如果使用精确匹配的方式没有找到，则采用模糊匹配的方式再查找一次
 			index = FindConnectionInIfTableFuzzy(adapters[i].description, pIfTable);
-		if (index != -1)
+		//if (index != -1)
+		//{
+		adapters[i].index = index;
+		adapters[i].in_bytes = pIfTable->table[index].dwInOctets;
+		adapters[i].out_bytes = pIfTable->table[index].dwOutOctets;
+		adapters[i].description_2 = (const char*)pIfTable->table[index].bDescr;
+		//}
+	}
+}
+
+void CAdapterCommon::GetAllIfTableInfo(vector<NetWorkConection>& adapters, MIB_IFTABLE * pIfTable)
+{
+	vector<NetWorkConection> adapters_tmp;
+	GetAdapterInfo(adapters_tmp);		//获取IP地址
+	adapters.clear();
+	for (size_t i{}; i < pIfTable->dwNumEntries; i++)
+	{
+		NetWorkConection connection;
+		connection.description = connection.description_2 = (const char*)pIfTable->table[i].bDescr;
+		connection.index = i;
+		connection.in_bytes = pIfTable->table[i].dwInOctets;
+		connection.out_bytes = pIfTable->table[i].dwOutOctets;
+		for (size_t j{}; j < adapters_tmp.size(); j++)
 		{
-			adapters[i].index = index;
-			adapters[i].in_bytes = pIfTable->table[index].dwInOctets;
-			adapters[i].out_bytes = pIfTable->table[index].dwOutOctets;
+			if (connection.description.find(adapters_tmp[j].description) != string::npos)
+			{
+				connection.ip_address = adapters_tmp[j].ip_address;
+				connection.subnet_mask = adapters_tmp[j].subnet_mask;
+				connection.default_gateway = adapters_tmp[j].default_gateway;
+				break;
+			}
 		}
+		adapters.push_back(connection);
 	}
 }
 
@@ -101,5 +128,18 @@ int CAdapterCommon::FindConnectionInIfTableFuzzy(string connection, MIB_IFTABLE*
 		if (index != wstring::npos)
 			return i;
 	}
-	return -1;
+	//如果还是没有找到，则使用字符串匹配算法查找
+	double max_degree{};
+	int best_index{};
+	for (size_t i{}; i < pIfTable->dwNumEntries; i++)
+	{
+		string descr = (const char*)pIfTable->table[i].bDescr;
+		double degree = CCommon::StringSimilarDegree_LD(descr, connection);
+		if (degree > max_degree)
+		{
+			max_degree = degree;
+			best_index = i;
+		}
+	}
+	return best_index;
 }
